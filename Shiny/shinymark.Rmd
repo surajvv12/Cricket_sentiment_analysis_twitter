@@ -1,0 +1,402 @@
+
+
+###global.R
+
+
+```{r,eval=FALSE, message=FALSE,warning=FALSE}
+library(tm)
+library(wordcloud)
+library(memoise)
+library(googleVis)
+library(ggplot2)
+
+
+#Create a list of players
+
+players<-list("Virat Kohli"="kohli",
+              "MS Dhoni"= "dhoni",
+              "Jasprit Bumrah" ="bumrah",
+              "Joe Root"="root",
+              "Jos Buttler"="butler",
+              "Ben Stokes"="Ben Stokes",
+              "Chris Gayle"="gayle",
+              "Dwayne Bravo"="bravo",
+              "Carlos Brathwaite"="brathwaite",
+              "David Warner"="warner",
+              "Shane Watson"="watson",
+              "Glenn Maxwell"="maxwell",
+              "Mushfiqur Rahim"="mushfiqur",
+              "Tamim Iqbal"="tamim",
+              "Mustafizur Rahman"="mustafizur",
+              "Shahid Afridi"="afridi",
+              "Mohammad Amir"="amir",
+              "Quinton de Kock"="dekock",
+              "AB de Villiers"="devillers",
+              "Hashim Amla"="amla",
+              "Martin Guptill"="guptill",
+              "Mitchell Santner"="santner",
+              "Ross Taylor"="taylor",
+              "Angelo Mathews"="mathews",
+              "Tillakaratne Dilshan"="dilshan",
+              "Lasith Malinga"="malinga",
+              "Mohammad Shahzad"="shahzad"
+              
+              )
+
+catch.error = function(x)
+{
+  # Create a missing value for test purpose
+  y = NA
+  
+  # Try to catch that error (NA) we just created
+  
+  catch_error = tryCatch(tolower(x), error=function(e) e)
+  
+  # if not an error, convert y to lowercase
+  if (!inherits(catch_error, "error"))
+  
+    y = tolower(x)
+  
+  # check result if error exists, otherwise the function works fine.
+  return(y)
+}
+
+cleanTweets<- function(tweet){
+  
+  # Clean the tweet for sentiment analysis
+  # remove html links, which are not required for sentiment analysis
+  
+  tweet = gsub("(f|ht)(tp)(s?)(://)(.*)[.|/](.*)", " ", tweet)
+  
+  # First we will remove retweet entities from
+  
+  tweet = gsub("(RT|via)((?:\\b\\W*@\\w+)+)", " ", tweet)
+  
+  # Then remove all "#Hashtag"
+  
+  tweet = gsub("#\\w+", " ", tweet)
+  
+  # Then remove all "@people"
+  
+  tweet = gsub("@\\w+", " ", tweet)
+  
+  # Then remove all the punctuation
+  
+  tweet = gsub("[[:punct:]]", " ", tweet)
+  
+  # Then remove numbers, we need only text for analytics
+  
+  tweet = gsub("[[:digit:]]", " ", tweet)
+  
+  # finally, we remove unnecessary spaces (white spaces, tabs etc)
+  
+  tweet = gsub("[ \t]{2,}", " ", tweet)
+  tweet = gsub("^\\s+|\\s+$", "", tweet)
+  
+  tweet = catch.error(tweet)
+  
+  tweet
+}
+
+cleanTweetsAndRemoveNAs<- function(Tweets) {
+  
+  TweetsCleaned = sapply(Tweets, cleanTweets)
+  
+  # Remove the "NA" tweets from this tweet list
+  
+  TweetsCleaned = TweetsCleaned[!is.na(TweetsCleaned)]
+  
+  names(TweetsCleaned) = NULL
+ 
+  # Remove the repetitive tweets from this tweet list
+  
+  TweetsCleaned = unique(TweetsCleaned)
+  
+  TweetsCleaned
+}
+
+#Get the tweets cleaned
+
+getCleanTweets <- memoise(function(player) {
+  
+  
+  if (!(player %in% players))
+    stop("Unknown player")
+  
+  tweets <-readLines(sprintf("./Data/%s.txt",player)) 
+  
+  tweetsCleaned<-cleanTweetsAndRemoveNAs(tweets)
+  
+  tweetsCleaned
+  
+})
+
+#Generate a term matrix for word cloud
+
+getTermMatrix <- memoise(function(player) {
+  
+  
+  if (!(player %in% players))
+    stop("Unknown Player")
+  
+  text <- readLines(sprintf("./Data/%s.txt", player),
+                    encoding="latin1",warn=FALSE)
+  #Create a corpus   
+  myCorpus = Corpus(VectorSource(text))
+  #Convert text to lowercase
+  myCorpus = tm_map(myCorpus, content_transformer(tolower))
+  #Remove Punctuations
+  myCorpus = tm_map(myCorpus, removePunctuation)
+  
+  # remove URLs
+  removeURL <- function(x) gsub("http[^[:space:]]*", "", x)
+  myCorpus <- tm_map(myCorpus, content_transformer(removeURL))
+  
+  # remove anything other than English letters or space
+  removeNumPunct <- function(x) gsub("[^[:alpha:][:space:]]*", "", x)
+  myCorpus <- tm_map(myCorpus, content_transformer(removeNumPunct))
+  
+  #remove numbers
+  myCorpus = tm_map(myCorpus, removeNumbers)
+  #remove stopwords in english
+  myCorpus = tm_map(myCorpus, removeWords,stopwords("en"))
+  
+  myCorpus = tm_map(myCorpus, removeWords,
+                    c(stopwords("SMART"), "thy", "thou", "thee", "the", "and", "but"))
+  # remove extra whitespace
+  myCorpus <- tm_map(myCorpus, stripWhitespace)
+  
+  
+  myDTM = TermDocumentMatrix(myCorpus,
+                             control = list(minWordLength = 1))
+  
+  
+  
+  m<-as.matrix(myDTM)
+  
+  sort(rowSums(m), decreasing = TRUE)
+})
+
+#Get the data for emotions
+
+getEmotions <- memoise(function(player) {
+  
+  
+  if (!(player %in% players))
+    stop("Unknown player")
+  
+  data <-read.csv(sprintf("./Emotions/%s.csv",player)) 
+  
+  data
+})
+
+
+```
+
+###ui.R
+
+```{r,eval=FALSE,warning=FALSE,message=FALSE}
+library(shinydashboard)
+library(shiny)
+
+dashboardPage(
+  
+  dashboardHeader(title = "T20 Cricket Players "),
+  dashboardSidebar(
+    h3("Choose the Player"),
+    selectInput("selection", "",
+                choices = players),
+    actionButton("update", "Change"),
+    hr(),
+    
+    sidebarMenu(
+      menuItem("Wordcloud",tabName = "wordcloud",icon = icon("cloud")),
+      menuItem("Top Words",tabName = "barchart",icon = icon("bar-chart")),
+      menuItem("Emotions",tabName = "emotions",icon = icon("smile-o"))
+      
+      
+    )
+  ),
+  
+  dashboardBody(
+    
+    tabItems(
+      
+      tabItem(tabName ="wordcloud",
+              
+              
+              
+              fluidRow(
+                
+                tabBox(title = "",width = 12,
+                       
+                       tabPanel(title = tagList(shiny::icon("comments"),"Tweets"),
+                                
+                                
+                                box(plotOutput("wordcloud1",height=500,width = 300)),
+                                
+                                box(title = "Controls",
+                                    sliderInput("freq","Minimum Frequency:",
+                                                min = 1,  max = 50, value = 15),
+                                    sliderInput("max","Maximum Number of Words:",
+                                                min = 1,  max = 300,  value = 100)
+                                )
+                       )
+                       
+                      
+                       
+                       
+                       
+                      
+                )
+                
+                
+                
+              )
+      ),
+      
+      tabItem(tabName = "barchart",
+              
+              fluidRow(
+                
+                tabBox(title = "",width = 12,
+                       
+                       tabPanel(title = tagList(shiny::icon("heart"),"Reviews"),
+                                
+                                plotOutput("bar1")
+                       )
+                       
+                       
+                       
+                )
+                
+                
+              )
+              
+              
+      ),
+      
+      tabItem(tabName = "emotions",
+              
+              fluidRow(
+                
+                tabBox(title = "",width = 12,
+                       
+                       tabPanel(title = tagList(shiny::icon("smile-o"),"Polarity"),
+                                
+                                htmlOutput("pie2")
+                       ),
+                       
+                       tabPanel(title = tagList(shiny::icon("pie-chart"),"Emotions"),
+                                
+                                htmlOutput("pie1")
+                       ),
+                       
+                      
+                       tabPanel(title = tagList(shiny::icon("thumbs-o-up"),"Emotion Score"),
+                                
+                                plotOutput("score1")
+                                
+                       )
+                       
+                       
+                )
+                
+                
+              )
+              
+              
+      )
+      
+      
+      
+      
+      
+      
+      
+      
+    )
+    
+    
+  )
+)
+
+
+
+
+```
+
+###server.r
+
+```{r,eval=FALSE,warning=FALSE,message=FALSE}
+function(input, output, session) {
+  # Define a reactive expression for the document term matrix
+  terms <- reactive({
+    # Change when the "update" button is pressed...
+    input$update
+    # ...but not for anything else
+    isolate({
+      withProgress({
+        setProgress(message = "Processing corpus...")
+        getTermMatrix(input$selection)
+      })
+    })
+  })
+  
+  data_emotion<-reactive({
+    
+    getEmotions(input$selection)
+    
+  })
+  
+  
+  
+  # Make the wordcloud drawing predictable during a session
+  wordcloud_rep <- repeatable(wordcloud)
+  
+  #Create the wordcloud
+  output$wordcloud1 <- renderPlot({
+    v <- terms()
+    wordcloud_rep(names(v), v, scale=c(5,0.5),
+                  min.freq = input$freq, max.words=input$max,
+                  colors=brewer.pal(8, "Dark2"))
+  })
+  
+  #Create a barchart for high frequency terms
+  
+  output$bar1<-renderPlot({
+    
+    plot1<-head(data.frame(Freq=terms()),n=20)
+    plot1$word<-row.names(plot1)
+    ggplot(plot1,aes(x=reorder(word,Freq),y=Freq))+geom_bar(stat="identity",fill="steelblue")+theme_minimal()+coord_flip()+geom_text(aes(label=Freq),vjust=0.5,color="black",size=4.0)+ylab("Frequency of words")+xlab("Top Words")+ggtitle("Top frequency words")
+  }) 
+ 
+  #Create a pie chart for the emotions
+  output$pie1<-renderGvis({
+    
+    data<-data_emotion()
+    emotion1<-as.data.frame(table(data$emotion))
+    Pie1<-gvisPieChart(emotion1,options = list(width=1200,height=600))
+    return(Pie1)
+    
+  })
+  
+  #Create a pie chart for the polarity
+  
+  output$pie2<-renderGvis({
+    
+    data<-data_emotion()
+    emotion2<-as.data.frame(table(data$polarity))
+    Pie2<-gvisPieChart(emotion2,options = list(width=1200,height=600))
+    return(Pie2)
+    
+  })
+  
+  #create a histogram for the emotion score
+  output$score1<-renderPlot({
+    
+    data<-data_emotion()
+    ggplot(data,aes(x=score))+geom_histogram(bins=50,color="black",fill="blue")+theme_minimal()+xlab("Sentiment Score")+ylab("count")+ggtitle("Sentiment Scores of reviews")
+  })
+}
+```
